@@ -136,16 +136,18 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         }
 
         // Bullet vs target collisions
-        val remB = mutableListOf<Bullet>()
-        val remT = mutableListOf<Target>()
-        for (b in bullets) {
-            for (t in targets) {
+        val itB = bullets.iterator()
+        while (itB.hasNext()) {
+            val b = itB.next()
+            val itT = targets.iterator()
+            while (itT.hasNext()) {
+                val t = itT.next()
                 val dx = b.pos.x - t.pos.x
                 val dy = b.pos.y - t.pos.y
                 val rr = b.radius + t.radius
                 if (dx * dx + dy * dy <= rr * rr) {
-                    remB.add(b)
-                    remT.add(t)
+                    itB.remove()
+                    itT.remove()
                     score += 1
                     audio.playPop()
                     haptics.buzz()
@@ -153,8 +155,6 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
                 }
             }
         }
-        bullets.removeAll(remB)
-        targets.removeAll(remT)
     }
 
     fun render(canvas: Canvas) {
