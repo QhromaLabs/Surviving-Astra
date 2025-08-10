@@ -59,8 +59,6 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     // Player
     private var playerPos = Vec2()
     private val playerRadius = dp(28f)
-    private var dragging = false
-    private val dragOffset = Vec2()
 
     // Spawn & difficulty
     private var spawnTimer = 0f
@@ -224,31 +222,14 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
                 }
             }
             GameState.RUNNING -> {
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_POINTER_DOWN -> state = GameState.PAUSED
-                    MotionEvent.ACTION_DOWN -> {
-                        val dx = event.x - playerPos.x
-                        val dy = event.y - playerPos.y
-                        if (dx * dx + dy * dy <= playerRadius * playerRadius) {
-                            dragging = true
-                            dragOffset.set(dx, dy)
-                        } else if (shootCooldown <= 0f) {
-                            shootCooldown = shootDelay
-                            val dir = Vec2(event.x - playerPos.x, event.y - playerPos.y)
-                            dir.normalize()
-                            bullets.add(Bullet(Vec2(playerPos.x, playerPos.y), dir, 900f, dp(10f)))
-                            audio.playShoot()
-                        }
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        if (dragging) {
-                            playerPos.set(
-                                (event.x - dragOffset.x).coerceIn(playerRadius, width - playerRadius),
-                                (event.y - dragOffset.y).coerceIn(playerRadius, height - playerRadius)
-                            )
-                        }
-                    }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> dragging = false
+                if (event.pointerCount >= 2) {
+                    state = GameState.PAUSED
+                } else if (event.action == MotionEvent.ACTION_DOWN && shootCooldown <= 0f) {
+                    shootCooldown = shootDelay
+                    val dir = Vec2(event.x - playerPos.x, event.y - playerPos.y)
+                    dir.normalize()
+                    bullets.add(Bullet(Vec2(playerPos.x, playerPos.y), dir, 900f, dp(10f)))
+                    audio.playShoot()
                 }
             }
             GameState.PAUSED -> {
