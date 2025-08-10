@@ -13,13 +13,12 @@ import co.qhroma.shooterlite.models.Target
 import co.qhroma.shooterlite.models.Vec2
 import kotlin.math.atan2
 import kotlin.math.cos
-import kotlin.math.min
 import kotlin.math.sin
 import kotlin.random.Random
 
 /**
- * GameView draws and updates the game. 
- * Controls: single tap to shoot, two-finger tap to pause. 
+ * GameView draws and updates the game.
+ * Controls: drag to move, single tap to shoot, two-finger tap to pause.
  * Change spawn rates and speeds inside spawnTarget() and constants below.
  */
 class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback {
@@ -59,6 +58,11 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     // Player
     private var playerPos = Vec2()
     private val playerRadius = dp(28f)
+
+    // Drag handling
+    private val touchStart = Vec2()
+    private var dragging = false
+    private val dragThreshold = dp(10f)
 
     // Spawn & difficulty
     private var spawnTimer = 0f
@@ -170,6 +174,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         // HUD
         canvas.drawText("Score: $score", 20f, 40f, paintText)
         canvas.drawText("Tap to shoot", 20f, 70f, paintText)
+        canvas.drawText("Drag to move", 20f, 100f, paintText)
 
         when (state) {
             GameState.MENU -> {
@@ -224,12 +229,38 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
             GameState.RUNNING -> {
                 if (event.pointerCount >= 2) {
                     state = GameState.PAUSED
-                } else if (event.action == MotionEvent.ACTION_DOWN && shootCooldown <= 0f) {
-                    shootCooldown = shootDelay
-                    val dir = Vec2(event.x - playerPos.x, event.y - playerPos.y)
-                    dir.normalize()
-                    bullets.add(Bullet(Vec2(playerPos.x, playerPos.y), dir, 900f, dp(10f)))
-                    audio.playShoot()
+                } else {
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> {
+                            dragging = false
+                            touchStart.set(event.x, event.y)
+                        }
+                        MotionEvent.ACTION_MOVE -> {
+                            if (!dragging) {
+                                val dx = event.x - touchStart.x
+                                val dy = event.y - touchStart.y
+                                if (dx * dx + dy * dy > dragThreshold * dragThreshold) {
+                                    dragging = true
+                                }
+                            }
+                            if (dragging) {
+                                val cx = event.x.coerceIn(playerRadius, width - playerRadius)
+                                val cy = event.y.coerceIn(playerRadius, height - playerRadius)
+                                playerPos.set(cx, cy)
+                            }
+                        }
+                        MotionEvent.ACTION_UP -> {
+                            if (!dragging && shootCooldown <= 0f) {
+                                shootCooldown = shootDelay
+                                val dir = Vec2(event.x - playerPos.x, event.y - playerPos.y)
+                                dir.normalize()
+                                bullets.add(Bullet(Vec2(playerPos.x, playerPos.y), dir, 900f, dp(10f)))
+                                audio.playShoot()
+                            }
+                            dragging = false
+                        }
+                        MotionEvent.ACTION_CANCEL -> dragging = false
+                    }
                 }
             }
             GameState.PAUSED -> {
