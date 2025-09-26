@@ -6,12 +6,14 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.Typeface
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import co.qhroma.shooterlite.models.Bullet
 import co.qhroma.shooterlite.models.Target
+import co.qhroma.shooterlite.models.Particle
 import co.qhroma.shooterlite.models.Vec2
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -60,6 +62,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     // Entities
     private val bullets = mutableListOf<Bullet>()
     private val targets = mutableListOf<Target>()
+    private val particles = mutableListOf<Particle>()
 
     // Player
     private var playerPos = Vec2()
@@ -81,8 +84,11 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     // Sprites
     private var playerBmp: Bitmap? = null
     private var bulletBmp: Bitmap? = null
-    private var backgroundBmp: Bitmap? = null
+    private var backgroundSrc: Bitmap? = null
+    private var backgroundSrcRect: Rect? = null
+    private var backgroundDstRect: Rect? = null
     private val asteroidSrc = mutableListOf<Bitmap>()
+    private val asteroidCache = HashMap<Pair<Int, Int>, Bitmap>()
 
     init {
         holder.addCallback(this)
@@ -164,15 +170,29 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
                     score += 1
                     audio.playPop()
                     haptics.buzz()
+                    spawnExplosion(t.pos)
                     break
                 }
             }
+        }
+        // Update particles
+        val itP = particles.iterator()
+        while (itP.hasNext()) {
+            val p = itP.next()
+            p.age += dt
+            p.pos.add(Vec2(p.vel.x * dt, p.vel.y * dt))
+            if (p.age >= p.life) itP.remove()
         }
     }
 
     fun render(canvas: Canvas) {
         canvas.drawColor(Color.parseColor("#121212"))
-        backgroundBmp?.let { canvas.drawBitmap(it, 0f, 0f, paintBitmap) }
+        val bg = backgroundSrc
+        val sRect = backgroundSrcRect
+        val dRect = backgroundDstRect
+        if (bg != null && sRect != null && dRect != null) {
+            canvas.drawBitmap(bg, sRect, dRect, paintBitmap)
+        }
 
         // Draw player
         playerBmp?.let {
@@ -208,6 +228,18 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
                 canvas.drawCircle(t.pos.x, t.pos.y, t.radius, paintTarget)
             }
         }
+
+        // Draw particles last (alpha fades)
+        for (p in particles) {
+            val t = (p.age / p.life).coerceIn(0f, 1f)
+            val alpha = ((1f - t) * 255f).toInt().coerceIn(0, 255)
+            paintBullet.color = p.color
+            paintBullet.alpha = alpha
+            val pr = p.radius * (1f - 0.3f * t)
+            canvas.drawCircle(p.pos.x, p.pos.y, pr, paintBullet)
+        }
+        // Reset paint alpha
+        paintBullet.alpha = 255
 
         // HUD
         canvas.drawText("Score: $score", 20f, 40f, paintText)
@@ -255,7 +287,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         val vel = Vec2(cos(angle) * speed, sin(angle) * speed)
         val spriteIndex = if (asteroidSrc.isNotEmpty()) Random.nextInt(asteroidSrc.size) else 0
         val sizePx = (r * 2f).toInt().coerceAtLeast(8)
-        val bmp = if (asteroidSrc.isNotEmpty()) Bitmap.createScaledBitmap(asteroidSrc[spriteIndex], sizePx, sizePx, true) else null
+        val bmp = if (asteroidSrc.isNotEmpty()) getAsteroidScaled(spriteIndex, sizePx) else null
         val spin = (Random.nextFloat() * 120f) - 60f // -60..+60 deg/sec
         val t = Target(pos, vel, r, true, spriteIndex, 0f, spin, bmp)
         targets.add(t)
@@ -294,6 +326,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     private fun startGame() {
         bullets.clear()
         targets.clear()
+        particles.clear()
         score = 0
         spawnTimer = 0f
         spawnInterval = 1.2f
@@ -313,9 +346,11 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
                 decodeDrawable(id)?.let { asteroidSrc.add(it) }
             }
         }
-        // Background scaled to screen
-        decodeDrawable(R.drawable.background)?.let { src ->
-            backgroundBmp = Bitmap.createScaledBitmap(src, w, h, true)
+        // Background with center-crop (preserve aspect ratio)
+        decodeDrawable(R.drawable.background)?.let { bg ->
+            backgroundSrc = bg
+            backgroundSrcRect = computeCenterCropSrcRect(bg.width, bg.height, w, h)
+            backgroundDstRect = Rect(0, 0, w, h)
         }
     }
 
@@ -330,5 +365,43 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         val base = decodeDrawable(id) ?: return null
         val s = sizePx.toInt().coerceAtLeast(1)
         return Bitmap.createScaledBitmap(base, s, s, true)
+    }
+
+    private fun computeCenterCropSrcRect(srcW: Int, srcH: Int, dstW: Int, dstH: Int): Rect {
+        val viewAspect = dstW.toFloat() / dstH.toFloat()
+        val imgAspect = srcW.toFloat() / srcH.toFloat()
+        return if (imgAspect > viewAspect) {
+            // Image is wider than view: crop width
+            val newW = (srcH * viewAspect).toInt()
+            val left = ((srcW - newW) / 2f).toInt()
+            Rect(left, 0, left + newW, srcH)
+        } else {
+            // Image is taller than view: crop height
+            val newH = (srcW / viewAspect).toInt()
+            val top = ((srcH - newH) / 2f).toInt()
+            Rect(0, top, srcW, top + newH)
+        }
+    }
+
+    private fun getAsteroidScaled(index: Int, sizePx: Int): Bitmap {
+        val key = Pair(index, sizePx)
+        asteroidCache[key]?.let { return it }
+        val src = asteroidSrc[index]
+        val scaled = Bitmap.createScaledBitmap(src, sizePx, sizePx, true)
+        asteroidCache[key] = scaled
+        return scaled
+    }
+
+    private fun spawnExplosion(at: Vec2) {
+        val count = 14
+        val color = Color.MAGENTA
+        for (i in 0 until count) {
+            val ang = Random.nextFloat() * (Math.PI.toFloat() * 2f)
+            val speed = 80f + Random.nextFloat() * 220f
+            val vel = Vec2(cos(ang) * speed, sin(ang) * speed)
+            val r = dp(2f + Random.nextFloat() * 3f)
+            val life = 0.35f + Random.nextFloat() * 0.3f
+            particles.add(Particle(Vec2(at.x, at.y), vel, r, life, 0f, color))
+        }
     }
 }
