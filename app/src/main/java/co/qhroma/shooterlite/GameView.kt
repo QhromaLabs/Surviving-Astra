@@ -1,6 +1,8 @@
 package co.qhroma.shooterlite
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -49,6 +51,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         typeface = Typeface.MONOSPACE
         isFakeBoldText = true
     }
+    private val paintBitmap = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        isFilterBitmap = true
+    }
 
     private var state = GameState.MENU
 
@@ -73,6 +78,12 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     private var shootCooldown = 0f
     private val shootDelay = 0.18f
 
+    // Sprites
+    private var playerBmp: Bitmap? = null
+    private var bulletBmp: Bitmap? = null
+    private var backgroundBmp: Bitmap? = null
+    private val asteroidSrc = mutableListOf<Bitmap>()
+
     init {
         holder.addCallback(this)
     }
@@ -89,6 +100,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         playerPos.set(width / 2f, height * 0.7f)
+        initGraphics(width, height)
     }
 
     fun update(dt: Float) {
@@ -119,6 +131,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         while (itT.hasNext()) {
             val t = itT.next()
             t.pos.add(Vec2(t.vel.x * dt, t.vel.y * dt))
+            t.angle += t.spin * dt
             // Wrap
             if (t.pos.x < -t.radius) t.pos.x = width + t.radius
             if (t.pos.x > width + t.radius) t.pos.x = -t.radius
@@ -159,13 +172,42 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
 
     fun render(canvas: Canvas) {
         canvas.drawColor(Color.parseColor("#121212"))
+        backgroundBmp?.let { canvas.drawBitmap(it, 0f, 0f, paintBitmap) }
 
         // Draw player
-        canvas.drawCircle(playerPos.x, playerPos.y, playerRadius, paintPlayer)
+        playerBmp?.let {
+            val x = playerPos.x - it.width / 2f
+            val y = playerPos.y - it.height / 2f
+            canvas.drawBitmap(it, x, y, paintBitmap)
+        } ?: run {
+            canvas.drawCircle(playerPos.x, playerPos.y, playerRadius, paintPlayer)
+        }
 
-        // Draw bullets and targets
-        for (b in bullets) canvas.drawCircle(b.pos.x, b.pos.y, b.radius, paintBullet)
-        for (t in targets) canvas.drawCircle(t.pos.x, t.pos.y, t.radius, paintTarget)
+        // Draw bullets
+        for (b in bullets) {
+            val bmp = bulletBmp
+            if (bmp != null) {
+                val x = b.pos.x - bmp.width / 2f
+                val y = b.pos.y - bmp.height / 2f
+                canvas.drawBitmap(bmp, x, y, paintBitmap)
+            } else {
+                canvas.drawCircle(b.pos.x, b.pos.y, b.radius, paintBullet)
+            }
+        }
+        // Draw targets with rotation if available
+        for (t in targets) {
+            val bmp = t.bmp
+            if (bmp != null) {
+                canvas.save()
+                canvas.rotate(t.angle, t.pos.x, t.pos.y)
+                val x = t.pos.x - bmp.width / 2f
+                val y = t.pos.y - bmp.height / 2f
+                canvas.drawBitmap(bmp, x, y, paintBitmap)
+                canvas.restore()
+            } else {
+                canvas.drawCircle(t.pos.x, t.pos.y, t.radius, paintTarget)
+            }
+        }
 
         // HUD
         canvas.drawText("Score: $score", 20f, 40f, paintText)
@@ -211,7 +253,12 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         angle += Random.nextFloat() * 0.6f - 0.3f
         val speed = 120f
         val vel = Vec2(cos(angle) * speed, sin(angle) * speed)
-        targets.add(Target(pos, vel, r))
+        val spriteIndex = if (asteroidSrc.isNotEmpty()) Random.nextInt(asteroidSrc.size) else 0
+        val sizePx = (r * 2f).toInt().coerceAtLeast(8)
+        val bmp = if (asteroidSrc.isNotEmpty()) Bitmap.createScaledBitmap(asteroidSrc[spriteIndex], sizePx, sizePx, true) else null
+        val spin = (Random.nextFloat() * 120f) - 60f // -60..+60 deg/sec
+        val t = Target(pos, vel, r, true, spriteIndex, 0f, spin, bmp)
+        targets.add(t)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -228,7 +275,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
                     shootCooldown = shootDelay
                     val dir = Vec2(event.x - playerPos.x, event.y - playerPos.y)
                     dir.normalize()
-                    bullets.add(Bullet(Vec2(playerPos.x, playerPos.y), dir, 900f, dp(10f)))
+                    val br = bulletBmp?.let { it.width / 2f } ?: dp(10f)
+                    bullets.add(Bullet(Vec2(playerPos.x, playerPos.y), dir, 900f, br))
                     audio.playShoot()
                 }
             }
@@ -250,5 +298,37 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         spawnTimer = 0f
         spawnInterval = 1.2f
         state = GameState.RUNNING
+    }
+
+    private fun initGraphics(w: Int, h: Int) {
+        if (playerBmp == null) playerBmp = decodeAndScaleDrawable(R.drawable.player, dp(56f))
+        if (bulletBmp == null) bulletBmp = decodeAndScaleDrawable(R.drawable.bullet, dp(20f))
+        // Load asteroid sources once (unscaled)
+        if (asteroidSrc.isEmpty()) {
+            val ids = listOf(
+                R.drawable.asteroid1, R.drawable.asteroid2, R.drawable.asteroid3, R.drawable.asteroid4,
+                R.drawable.asteroid5, R.drawable.asteroid6, R.drawable.asteroid7, R.drawable.asteroid8
+            )
+            for (id in ids) {
+                decodeDrawable(id)?.let { asteroidSrc.add(it) }
+            }
+        }
+        // Background scaled to screen
+        decodeDrawable(R.drawable.background)?.let { src ->
+            backgroundBmp = Bitmap.createScaledBitmap(src, w, h, true)
+        }
+    }
+
+    private fun decodeDrawable(id: Int): Bitmap? {
+        return try {
+            val opts = BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 }
+            BitmapFactory.decodeResource(resources, id, opts)
+        } catch (_: Exception) { null }
+    }
+
+    private fun decodeAndScaleDrawable(id: Int, sizePx: Float): Bitmap? {
+        val base = decodeDrawable(id) ?: return null
+        val s = sizePx.toInt().coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(base, s, s, true)
     }
 }
